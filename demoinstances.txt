@@ -1,0 +1,219 @@
+# Configure the AWS Provider
+provider "aws" {
+  region = "us-east-2"
+}
+###########-----VPC_Creation------#############
+resource "aws_vpc" "my_vpc" {
+  cidr_block = "172.16.0.0/16"
+
+  tags = {
+    Name = "tf-MY_VPC"
+  }
+}
+######################-------Pub_SUBNET-1-------#####################
+resource "aws_subnet" "pubsubnet-1" {
+  vpc_id            = aws_vpc.my_vpc.id
+  cidr_block        = "172.16.10.0/24"
+  availability_zone = "us-east-2a"
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "pubsubnet-1"
+  }
+}
+######################-------prvt_SUBNET-1-------#####################
+resource "aws_subnet" "prvtsubnet-1" {
+  vpc_id            = aws_vpc.my_vpc.id
+  cidr_block        = "172.16.20.0/24"
+  availability_zone = "us-east-2a"
+  map_public_ip_on_launch = false
+
+  tags = {
+    Name = "prvtsubnet-1"
+  }
+}
+############################-------Public_SUBNET-2---------------###########################
+resource "aws_subnet" "public-subnet-2" {
+  vpc_id            = aws_vpc.my_vpc.id
+  cidr_block        = "172.16.30.0/24"
+  availability_zone = "us-east-2b"
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "public-subnet-2"
+  }
+}
+############################-------Private_SUBNET-2---------------###########################
+resource "aws_subnet" "private-subnet-2" {
+  vpc_id            = aws_vpc.my_vpc.id
+  cidr_block        = "172.16.40.0/24"
+  availability_zone = "us-east-2b"
+map_public_ip_on_launch = false
+
+  tags = {
+    Name = "private-subnet-2"
+  }
+}
+############################------IGW-----####################################
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.my_vpc.id
+
+  tags = {
+    Name = "IGW"
+  }
+}
+############---------pub-Routetable-1-----------##############
+resource "aws_route_table" "pubrt" {
+  vpc_id = aws_vpc.my_vpc.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.igw.id
+  }
+
+  tags = {
+    Name = "pub-rt"
+  }
+}
+############---------prvt-Routetable-2-----------##############
+resource "aws_route_table" "prvtrt" {
+  vpc_id = aws_vpc.my_vpc.id
+
+  tags = {
+    Name = "prvt-rt"
+  }
+}
+###################---------Subnet-Association-in-RouteTable----------#################
+resource "aws_route_table_association" "a" {
+  subnet_id      = aws_subnet.pubsubnet-1.id
+  route_table_id = aws_route_table.pubrt.id
+}
+resource "aws_route_table_association" "b" {
+  subnet_id      = aws_subnet.public-subnet-2.id
+  route_table_id = aws_route_table.pubrt.id
+}
+resource "aws_route_table_association" "c" {
+  subnet_id      = aws_subnet.prvtsubnet-1.id
+  route_table_id = aws_route_table.prvtrt.id
+}
+resource "aws_route_table_association" "d" {
+  subnet_id      = aws_subnet.private-subnet-2.id
+  route_table_id = aws_route_table.prvtrt.id
+}
+#################--------Public-Security-Groups------------#####################
+resource "aws_security_group" "pub_sg" {
+  name        = "pub_sg"
+  description = "Allow TLS inbound traffic"
+  vpc_id      = aws_vpc.my_vpc.id
+
+  ingress {
+    description      = "ssh"
+    from_port        = 22
+    to_port          = 22
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port        = 0
+    to_port          = 0
+    protocol         = "-1"
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
+  }
+
+  tags = {
+    Name = "pub-security-Grp"
+  }
+}
+###################----------Private-Security-Group-------###############
+resource "aws_security_group" "prvt_sg" {
+  name        = "prvt_sg"
+  description = "Allow TLS inbound traffic"
+  vpc_id      = aws_vpc.my_vpc.id
+
+ingress {
+    description      = "ssh"
+    from_port        = 22
+    to_port          = 22
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+  }
+  ingress {
+    description      = "TLS from VPC"
+    from_port        = 0
+    to_port          = 0
+    protocol         = "-1"
+    cidr_blocks      = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port        = 0
+    to_port          = 0
+    protocol         = "-1"
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
+  }
+
+  tags = {
+    Name = "private-security-Grp"
+  }
+}
+#####################-------------EC2-Instances-Creation------------##########################
+#######***Public-Instance*****#####
+resource "aws_instance" "linux-1" {
+  ami           = "ami-0568773882d492fc8"
+  instance_type = "t2.micro"
+  availability_zone = "us-east-2a"
+  key_name = "ohiokey"
+  associate_public_ip_address = true
+  subnet_id = aws_subnet.pubsubnet-1.id
+  vpc_security_group_ids = [aws_security_group.pub_sg.id]
+  user_data = <<EOF
+#!/bin/bash
+yum update -y
+yum install -y httpd.x86_64
+systemctl start httpd.service
+systemctl enable httpd.service
+echo “Hello World from $(hostname -f)” > /var/www/html/index.html
+EOF
+  tags = {
+    Name = "public-1a"
+  }
+}
+resource "aws_instance" "Linux2" {
+  ami           = "ami-0568773882d492fc8"
+  instance_type = "t2.micro"
+  availability_zone = "us-east-2a"
+  subnet_id = aws_subnet.prvtsubnet-1.id
+  vpc_security_group_ids =  [aws_security_group.prvt_sg.id]
+  key_name = "ohiokey"
+  associate_public_ip_address = false
+  tags = {
+    Name = "private-2a"
+  }
+}
+resource "aws_instance" "Linux3" {
+  ami           = "ami-0568773882d492fc8"
+  instance_type = "t2.micro"
+  availability_zone = "us-east-2b"
+  subnet_id = aws_subnet.public-subnet-2.id
+  vpc_security_group_ids = [aws_security_group.pub_sg.id]
+  key_name = "ohiokey"
+  associate_public_ip_address = true
+  tags = {
+    Name = "public-2b"
+  }
+}
+resource "aws_instance" "Linux4" {
+  ami           = "ami-0568773882d492fc8"
+  instance_type = "t2.micro"
+  availability_zone = "us-east-2b"
+  subnet_id = aws_subnet.private-subnet-2.id
+  vpc_security_group_ids =  [aws_security_group.prvt_sg.id]
+  key_name = "ohiokey"
+  associate_public_ip_address = false
+  tags = {
+    Name = "private-2b"
+  }
+}
